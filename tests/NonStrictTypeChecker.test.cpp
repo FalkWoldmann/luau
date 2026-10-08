@@ -21,6 +21,7 @@ LUAU_FASTINT(LuauNonStrictTypeCheckerRecursionLimit)
 LUAU_FASTINT(LuauCheckRecursionLimit)
 LUAU_FASTFLAG(LuauAddRecursionCounterToNonStrictTypeChecker)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(LuauNonStrictRigidGenerics)
 
 using namespace Luau;
 
@@ -916,6 +917,78 @@ TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "typecheck_class_method_bodies")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     LUAU_CHECK_ERROR(result, CheckedFunctionCallError);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "string_format_with_non_literal_format_accepts_generic_arguments")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauNonStrictRigidGenerics, true},
+    };
+
+    CheckResult result = check(Mode::Nonstrict, R"(
+        local FMT = "%s -> %s"
+        local function settle(c, status)
+            local a = string.format(FMT, c.status, status)
+            local b = FMT:format(c.status, status)
+            if status then
+                print(string.format(FMT, c.status, status))
+            end
+            c.status = status
+            return a, b
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "generic_arguments_are_not_definite_runtime_errors")
+{
+    ScopedFastFlag sff{FFlag::LuauNonStrictRigidGenerics, true};
+
+    CheckResult result = checkNonStrict(R"(
+        local function f<T>(x: T, y: T?, z: T | string)
+            abs(x)
+            abs(y)
+            abs(z)
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "refined_generic_arguments_are_not_definite_runtime_errors")
+{
+    ScopedFastFlag sff{FFlag::LuauNonStrictRigidGenerics, true};
+
+    CheckResult result = checkNonStrict(R"(
+        local function f<T>(x: T?)
+            if x then
+                abs(x)
+            end
+            if x ~= nil then
+                lower(x)
+            end
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "generic_inside_a_definite_runtime_error_is_still_reported")
+{
+    ScopedFastFlag sff{FFlag::LuauNonStrictRigidGenerics, true};
+
+    CheckResult result = checkNonStrict(R"(
+        local function f<T>(x: T, y: T & (string | number) & (string | boolean))
+            abs({x})
+            abs(y)
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    NONSTRICT_REQUIRE_CHECKED_ERR(Position(2, 16), "abs", result);
+    NONSTRICT_REQUIRE_CHECKED_ERR(Position(3, 16), "abs", result);
 }
 
 TEST_SUITE_END();

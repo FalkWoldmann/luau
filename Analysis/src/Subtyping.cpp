@@ -830,9 +830,9 @@ SubtypingResult Subtyping::isCovariantWith(SubtypingEnvironment& env, TypeId sub
     // TODO: These branches are entirely incorrect. We should never consider
     // generic types to "always" be a sub type or super type of another type
     // in a given scope.
-    else if (auto subGeneric = get<GenericType>(subTy); subGeneric && subsumes(subGeneric->scope, scope))
+    else if (auto subGeneric = get<GenericType>(subTy); subGeneric && !rigidGenerics && subsumes(subGeneric->scope, scope))
         return isCovariantWith(env, builtinTypes->neverType, superTy, scope);
-    else if (auto superGeneric = get<GenericType>(superTy); superGeneric && subsumes(superGeneric->scope, scope))
+    else if (auto superGeneric = get<GenericType>(superTy); superGeneric && !rigidGenerics && subsumes(superGeneric->scope, scope))
         return isCovariantWith(env, subTy, builtinTypes->unknownType, scope);
     else if (get<AnyType>(superTy))
         result = {true};
@@ -2735,6 +2735,12 @@ SubtypingResult Subtyping::isCovariantWith(
     result.andAlso(isCovariantWith(env, subNorm->tables, superNorm->tables, scope));
     result.andAlso(isCovariantWith(env, subNorm->functions, superNorm->functions, scope));
     // isCovariantWith(subNorm->tyvars, superNorm->tyvars);
+    if (rigidGenerics)
+    {
+        // `T & X` is a subtype of every type that `X` is a subtype of.
+        for (const auto& [_, intersected] : subNorm->tyvars)
+            result.andAlso(isCovariantWith(env, std::shared_ptr<const NormalizedType>(subNorm, intersected.get()), superNorm, scope));
+    }
     return result;
 }
 

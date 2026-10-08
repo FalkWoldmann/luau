@@ -215,6 +215,12 @@ struct Subtyping
     // a covariant test where an invariant test would otherwise be required.
     const DenseHashSet<TypeId>* uniqueTypes = nullptr;
 
+    // If set, generics that are in scope are not assumed to be never (as a
+    // subtype) or unknown (as a supertype), and the generic part of a
+    // normalized type is not ignored, so a generic is only a subtype of a type
+    // that every instantiation of it is a subtype of.
+    bool rigidGenerics = false;
+
     using SeenSet = DenseHashSet<std::pair<TypeId, TypeId>, TypePairHash>;
     using SeenTypePackSet = DenseHashSet<std::pair<TypePackId, TypePackId>, TypePairHash>;
 

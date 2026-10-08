@@ -25,6 +25,7 @@ LUAU_FASTINTVARIABLE(LuauNonStrictTypeCheckerRecursionLimit, 300)
 LUAU_FASTFLAGVARIABLE(LuauAddRecursionCounterToNonStrictTypeChecker)
 LUAU_FASTFLAG(LuauStrictVisitInstantiatedType)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAGVARIABLE(LuauNonStrictRigidGenerics)
 
 namespace Luau
 {
@@ -195,6 +196,11 @@ struct NonStrictTypeChecker
         , dfg(dfg)
         , limits(limits)
     {
+        // Set once for the whole checker rather than around each runtime error
+        // check: Subtyping caches its results, so toggling this per call would
+        // let them leak between the two modes. Type function reduction in
+        // checkForTypeFunctionInhabitance therefore sees rigid generics too.
+        subtyping.rigidGenerics = FFlag::LuauNonStrictRigidGenerics;
     }
 
     std::optional<StackPusher> pushStack(AstNode* node)
