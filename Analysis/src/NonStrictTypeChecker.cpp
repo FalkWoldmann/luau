@@ -25,6 +25,7 @@ LUAU_FASTINTVARIABLE(LuauNonStrictTypeCheckerRecursionLimit, 300)
 LUAU_FASTFLAGVARIABLE(LuauAddRecursionCounterToNonStrictTypeChecker)
 LUAU_FASTFLAG(LuauStrictVisitInstantiatedType)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAGVARIABLE(LuauNonStrictSkipNeverIntersections)
 
 namespace Luau
 {
@@ -1317,7 +1318,25 @@ private:
     bool shouldSkipRuntimeErrorTesting(TypeId test)
     {
         TypeId t = follow(test);
-        return is<NeverType, TypeFunctionInstanceType>(t);
+        if (is<NeverType, TypeFunctionInstanceType>(t))
+            return true;
+
+        // An intersection with `never` is skipped like `never` itself. It shows up when a type
+        // is refined before it is solved to `never`, e.g. `never & ~(false?)`. This is checked
+        // structurally because the normalizer currently reduces `T & never` to `T`.
+        if (FFlag::LuauNonStrictSkipNeverIntersections)
+        {
+            if (const IntersectionType* itv = get<IntersectionType>(t))
+            {
+                for (TypeId part : itv)
+                {
+                    if (is<NeverType>(follow(part)))
+                        return true;
+                }
+            }
+        }
+
+        return false;
     }
 };
 

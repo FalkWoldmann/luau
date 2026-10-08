@@ -21,6 +21,8 @@ LUAU_FASTINT(LuauNonStrictTypeCheckerRecursionLimit)
 LUAU_FASTINT(LuauCheckRecursionLimit)
 LUAU_FASTFLAG(LuauAddRecursionCounterToNonStrictTypeChecker)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(LuauNonStrictSkipNeverIntersections)
+LUAU_FASTFLAG(LuauTraverseScopeToFunction)
 
 using namespace Luau;
 
@@ -916,6 +918,105 @@ TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "typecheck_class_method_bodies")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     LUAU_CHECK_ERROR(result, CheckedFunctionCallError);
+}
+
+TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "truthy_refined_property_used_as_string_and_as_method_receiver")
+{
+    ScopedFastFlag sff{FFlag::LuauNonStrictSkipNeverIntersections, true};
+
+    CheckResult result = checkNonStrict(R"(
+local function andExpr(input)
+    local n = input.path and lower(input.path)
+    return n, input.path:match("x")
+end
+
+local function ifStatement(input)
+    if input.path then
+        lower(input.path)
+    end
+    return input.path:match("x")
+end
+
+local function methodFirst(path)
+    local m = path:match("x")
+    local n = path and lower(path)
+    return n, m
+end
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "if_expression_refined_property_used_as_string_and_as_method_receiver")
+{
+    // Without LuauTraverseScopeToFunction, `input.path` is inferred as a table here.
+    ScopedFastFlag sff[] = {
+        {FFlag::LuauNonStrictSkipNeverIntersections, true},
+        {FFlag::LuauTraverseScopeToFunction, true},
+    };
+
+    CheckResult result = checkNonStrict(R"(
+local function f(input)
+    local n = if input.path then lower(input.path) else nil
+    return n, input.path:match("x")
+end
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "intersection_with_never_argument_does_not_warn")
+{
+    ScopedFastFlag sff{FFlag::LuauNonStrictSkipNeverIntersections, true};
+
+    CheckResult result = checkNonStrict(R"(
+local function f(x: never & string)
+    return abs(x)
+end
+
+local function g(x: string & never)
+    return abs(x)
+end
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "nil_refined_argument_of_wrong_type_still_warns")
+{
+    ScopedFastFlag sff{FFlag::LuauNonStrictSkipNeverIntersections, true};
+
+    CheckResult result = checkNonStrict(R"(
+local function f(x)
+    if x == nil then
+        lower(x)
+    end
+end
+
+local function g(input)
+    if input.path == nil then
+        abs(input.path)
+    end
+end
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+    NONSTRICT_REQUIRE_CHECKED_ERR(Position(3, 14), "lower", result);
+    NONSTRICT_REQUIRE_CHECKED_ERR(Position(9, 12), "abs", result);
+}
+
+TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "inhabited_intersection_argument_of_wrong_type_still_warns")
+{
+    ScopedFastFlag sff{FFlag::LuauNonStrictSkipNeverIntersections, true};
+
+    CheckResult result = checkNonStrict(R"(
+local function f(x: (number | boolean) & (number | string))
+    return lower(x)
+end
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    NONSTRICT_REQUIRE_CHECKED_ERR(Position(2, 17), "lower", result);
 }
 
 TEST_SUITE_END();
