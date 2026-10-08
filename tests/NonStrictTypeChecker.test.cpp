@@ -21,6 +21,7 @@ LUAU_FASTINT(LuauNonStrictTypeCheckerRecursionLimit)
 LUAU_FASTINT(LuauCheckRecursionLimit)
 LUAU_FASTFLAG(LuauAddRecursionCounterToNonStrictTypeChecker)
 LUAU_FASTFLAG(DebugLuauForceOldSolver)
+LUAU_FASTFLAG(LuauNonStrictUninhabitedRefinements)
 
 using namespace Luau;
 
@@ -916,6 +917,164 @@ TEST_CASE_FIXTURE(NonStrictTypeCheckerFixture, "typecheck_class_method_bodies")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     LUAU_CHECK_ERROR(result, CheckedFunctionCallError);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "nonstrict_uninhabited_refinement_in_or")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauNonStrictUninhabitedRefinements, true},
+    };
+
+    // `value` is inferred as `nil & unknown`, so the refinement to `number` on the right of `or` is `nil & unknown & number`.
+    CheckResult result = check(Mode::Nonstrict, R"(
+local function whole(value, max)
+    if type(value) ~= "number" or value ~= math.floor(value) or value < 0 or value > max then
+        return nil
+    end
+    return value
+end
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "nonstrict_uninhabited_refinement_in_and")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauNonStrictUninhabitedRefinements, true},
+    };
+
+    CheckResult result = check(Mode::Nonstrict, R"(
+local function f(value)
+    if type(value) == "number" and math.floor(value) then
+        return nil
+    end
+    return value
+end
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "nonstrict_uninhabited_union_of_refinements")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauNonStrictUninhabitedRefinements, true},
+    };
+
+    CheckResult result = check(Mode::Nonstrict, R"(
+local function f(value)
+    if (type(value) == "number" or type(value) == "string") and math.floor(value) then
+        return nil
+    end
+    return value
+end
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "nonstrict_uninhabited_refinement_of_string_and_upvalue")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauNonStrictUninhabitedRefinements, true},
+    };
+
+    CheckResult result = check(Mode::Nonstrict, R"(
+local function nonEmpty(value)
+    if type(value) ~= "string" or string.len(value) == 0 then
+        return nil
+    end
+    return value
+end
+
+local function floorer(value)
+    if type(value) ~= "number" then
+        return nil
+    end
+    local function floor()
+        return math.floor(value)
+    end
+    return value, floor
+end
+)");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "nonstrict_uninhabited_refinement_still_reports_guarded_misuse")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauNonStrictUninhabitedRefinements, true},
+    };
+
+    // The inferred types of `value` make these refinements uninhabited (`boolean & number`, `table & never`), but the guard alone
+    // shows that each call errors whenever it runs.
+    CheckResult result = check(Mode::Nonstrict, R"(
+local function guarded(value)
+    if type(value) == "boolean" then
+        math.floor(value)
+    end
+    return value
+end
+
+local function negated(value)
+    if type(value) ~= "number" then
+        math.floor(value)
+        return nil
+    end
+    return value
+end
+
+local function afterReturnNil(value)
+    if typeof(value) == "table" then
+        math.floor(value)
+        return nil
+    end
+    return value
+end
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(3, result);
+    NONSTRICT_REQUIRE_CHECKED_ERR(Position(3, 19), "math.floor", result);
+    NONSTRICT_REQUIRE_CHECKED_ERR(Position(10, 19), "math.floor", result);
+    NONSTRICT_REQUIRE_CHECKED_ERR(Position(18, 19), "math.floor", result);
+
+    for (const TypeError& error : result.errors)
+    {
+        const CheckedFunctionCallError* err = get<CheckedFunctionCallError>(error);
+        REQUIRE(err);
+        if (error.location.begin.line == 3)
+            CHECK_EQ("boolean", toString(err->passed));
+        else if (error.location.begin.line == 18)
+            CHECK_EQ("table", toString(err->passed));
+    }
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "nonstrict_inhabited_refinement_keeps_its_type")
+{
+    ScopedFastFlag sffs[] = {
+        {FFlag::DebugLuauForceOldSolver, false},
+        {FFlag::LuauNonStrictUninhabitedRefinements, true},
+    };
+
+    CheckResult result = check(Mode::Nonstrict, R"(
+local function f(value: string?)
+    if value ~= nil then
+        math.floor(value)
+    end
+end
+)");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+    const CheckedFunctionCallError* err = get<CheckedFunctionCallError>(result.errors[0]);
+    REQUIRE(err);
+    CHECK_EQ("string", toString(err->passed));
 }
 
 TEST_SUITE_END();

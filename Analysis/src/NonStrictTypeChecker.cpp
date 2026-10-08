@@ -25,6 +25,7 @@ LUAU_FASTINTVARIABLE(LuauNonStrictTypeCheckerRecursionLimit, 300)
 LUAU_FASTFLAGVARIABLE(LuauAddRecursionCounterToNonStrictTypeChecker)
 LUAU_FASTFLAG(LuauStrictVisitInstantiatedType)
 LUAU_FASTFLAG(DebugLuauUserDefinedClasses)
+LUAU_FASTFLAGVARIABLE(LuauNonStrictUninhabitedRefinements)
 
 namespace Luau
 {
@@ -1266,6 +1267,8 @@ struct NonStrictTypeChecker
             {
 
                 TypeId actualType = lookupType(fragment);
+                if (FFlag::LuauNonStrictUninhabitedRefinements)
+                    actualType = withoutUninhabitedBinding(fragment, actualType, scope);
                 if (shouldSkipRuntimeErrorTesting(actualType))
                     continue;
                 SubtypingResult r = subtyping.isSubtype(actualType, *contextTy, scope);
@@ -1312,6 +1315,46 @@ private:
         if (!cachedResult)
             cachedResult = arena->addType(NegationType{baseType});
         return cachedResult;
+    }
+
+    // A refinement intersects the type of a local with a discriminant, so `type(value) == "number"` gives `T & number`. When `T` is
+    // inferred too narrowly, e.g. `nil` because of an earlier `return nil`, the refinement is uninhabited, and an uninhabited type is a
+    // subtype of every negation. In that case the discriminant is all we know about the runtime value, so test it on its own.
+    TypeId withoutUninhabitedBinding(AstExpr* fragment, TypeId actualType, NotNull<Scope> scope)
+    {
+        AstExprLocal* local = fragment->as<AstExprLocal>();
+        if (!local || !is<IntersectionType, UnionType>(follow(actualType)) || normalizer.isInhabited(actualType) != NormalizationResult::False)
+            return actualType;
+
+        std::optional<TypeId> binding = scope->lookup(Symbol{local->local});
+        return binding ? replaceBinding(actualType, follow(*binding)) : actualType;
+    }
+
+    TypeId replaceBinding(TypeId ty, TypeId binding)
+    {
+        ty = follow(ty);
+        if (ty == binding)
+            return builtinTypes->unknownType;
+
+        const IntersectionType* it = get<IntersectionType>(ty);
+        const UnionType* ut = get<UnionType>(ty);
+        if (!it && !ut)
+            return ty;
+
+        TypeIds parts;
+        bool changed = false;
+        for (TypeId part : it ? it->parts : ut->options)
+        {
+            TypeId replaced = replaceBinding(part, binding);
+            changed |= replaced != follow(part);
+            parts.insert(replaced);
+        }
+
+        if (!changed)
+            return ty;
+        if (it)
+            return simplifyIntersection(builtinTypes, arena, std::move(parts)).result;
+        return arena->addType(UnionType{std::vector<TypeId>(parts.begin(), parts.end())});
     }
 
     bool shouldSkipRuntimeErrorTesting(TypeId test)
